@@ -252,7 +252,27 @@ def get_thumbnail_photo(_drive, thumbnail_link):
         logger.exception(f"サムネイルの読み込みに失敗。Link: {thumbnail_link}")
         return None
 
-### フェーズ2: 保存関数を自由票に対応 (バグ修正版) ###
+
+def _get_row_ranges(rows):
+    """連続する行番号のリストを(start, end)のタプルのリストに変換する"""
+    if not rows:
+        return []
+    sorted_rows = sorted(list(set(rows)))
+    ranges = []
+    start = sorted_rows[0]
+    end = sorted_rows[0]
+    for row in sorted_rows[1:]:
+        if row == end + 1:
+            end = row
+        else:
+            ranges.append((start, end))
+            start = row
+            end = row
+    ranges.append((start, end))
+    # [(start1, end1), (start2, end2), ...]
+    return ranges
+
+### フェーズ2: 保存関数を自由票に対応 (API負荷 改善版) ###
 def save_all_progress(user_name, voted_for_map, favorites_list, free_votes_list):
     try:
         logger.info(f"ユーザー '{user_name}' のデータ保存処理（バックグラウンド）を開始。")
@@ -266,21 +286,61 @@ def save_all_progress(user_name, voted_for_map, favorites_list, free_votes_list)
         sheet_favorites = spreadsheet.worksheet(FAV_SHEET_NAME)
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
-        # --- ここからが修正箇所 ---
-        # 既存の投票データ（代表票・自由票両方）を安全に削除
+        # --- ここからが修正箇所 (batch_updateによる一括削除) ---
+        
+        # 1. 投票シートの削除リクエストを作成
         all_votes_records = sheet_votes.get_all_records()
         rows_to_delete_votes = [i + 2 for i, record in enumerate(all_votes_records) if record.get('投票者') == user_name]
-        for row_index in sorted(rows_to_delete_votes, reverse=True):
-            sheet_votes.delete_rows(row_index)
-
-        # お気に入りデータを安全に削除
+        vote_ranges = _get_row_ranges(rows_to_delete_votes)
+        
+        vote_delete_requests = []
+        if vote_ranges:
+            sheet_votes_id = sheet_votes.id
+            # 範囲を逆順 (行番号が大きい順) に処理し、リクエストを作成
+            for start, end in reversed(vote_ranges):
+                vote_delete_requests.append({
+                    "deleteDimension": {
+                        "range": {
+                            "sheetId": sheet_votes_id,
+                            "dimension": "ROWS",
+                            "startIndex": start - 1, # 0-indexed
+                            "endIndex": end         # 0-indexed (Exclusive)
+                        }
+                    }
+                })
+        
+        # 2. お気に入りシートの削除リクエストを作成
         all_favs_records = sheet_favorites.get_all_records()
         rows_to_delete_favs = [i + 2 for i, record in enumerate(all_favs_records) if record.get('投票者') == user_name]
-        for row_index in sorted(rows_to_delete_favs, reverse=True):
-            sheet_favorites.delete_rows(row_index)
+        fav_ranges = _get_row_ranges(rows_to_delete_favs)
+        
+        fav_delete_requests = []
+        if fav_ranges:
+            sheet_favorites_id = sheet_favorites.id
+            for start, end in reversed(fav_ranges):
+                fav_delete_requests.append({
+                    "deleteDimension": {
+                        "range": {
+                            "sheetId": sheet_favorites_id,
+                            "dimension": "ROWS",
+                            "startIndex": start - 1, # 0-indexed
+                            "endIndex": end         # 0-indexed (Exclusive)
+                        }
+                    }
+                })
+
+        # 3. 削除リクエストを一括実行 (APIコールは最大2回)
+        if vote_delete_requests:
+            spreadsheet.batch_update({"requests": vote_delete_requests})
+            logger.info(f"'{user_name}' の古い投票データ {len(rows_to_delete_votes)} 行を削除しました。")
+            
+        if fav_delete_requests:
+            spreadsheet.batch_update({"requests": fav_delete_requests})
+            logger.info(f"'{user_name}' の古いお気に入り {len(rows_to_delete_favs)} 行を削除しました。")
+            
         # --- ここまでが修正箇所 ---
 
-        # 新しいデータを追加
+        # 新しいデータを追加 (この部分は変更なし)
         new_vote_rows = [[user_name, photo_id, '代表票', timestamp] for photo_id in voted_for_map.values()]
         new_free_vote_rows = [[user_name, photo_id, '自由票', timestamp] for photo_id in free_votes_list]
         all_new_votes = new_vote_rows + new_free_vote_rows
