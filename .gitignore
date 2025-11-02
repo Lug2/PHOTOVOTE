@@ -1,0 +1,13 @@
+# 仮想環境フォルダ
+env/
+*.env/
+
+# Pythonキャッシュファイル
+__pycache__/
+*.pyc
+
+# Mac固有のファイル
+.DS_Store
+
+#秘匿
+photovotingapp-476406-eb39e1d21798.json
