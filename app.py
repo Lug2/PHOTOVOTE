@@ -12,6 +12,8 @@ import time
 import logging
 from PIL import Image
 import base64
+import pandas as pd
+import time
 
 # --- 初期設定 ---
 Image.MAX_IMAGE_PIXELS = None
@@ -70,7 +72,9 @@ TARGET_FOLDER_ID = st.secrets["target_folder_id"]
 SPREADSHEET_NAME = st.secrets["spreadsheet_name"]
 VOTE_SHEET_NAME = st.secrets["vote_sheet_name"]
 FAV_SHEET_NAME = st.secrets["fav_sheet_name"]
+RESULTS_SHEET_NAME = st.secrets.get("results_sheet_name", "集計結果")
 THUMBNAIL_SIZE_PX = 700
+RESULT_THUMBNAIL_SIZE_PX = 1400
 
 # --- グローバル定数 ---
 # 正規表現パターンはここで一度だけコンパイルする
@@ -407,6 +411,23 @@ def show_fullscreen_dialog(photo_id):
     else:
         placeholder.error("画像の読み込みに失敗しました。")
 
+
+
+@st.cache_data(ttl=300) # 5分間キャッシュ
+def fetch_processed_results(_gc):
+    """【新機能】管理者が作成した「集計結果」シートからデータを取得する"""
+    try:
+        logger.info("集計結果シートの読み込み（キャッシュ）を開始。")
+        spreadsheet = _gc.open(SPREADSHEET_NAME)
+        # --- ここが 'VOTE_SHEET_NAME' ではない ---
+        sheet_results = spreadsheet.worksheet(RESULTS_SHEET_NAME) 
+        all_results_data = sheet_results.get_all_records()
+        logger.info(f"{len(all_results_data)}件の集計結果行を読み込み完了。")
+        return all_results_data
+    except Exception as e:
+        logger.exception("集計結果シートの読み込み中にエラーが発生。")
+        return None
+
 # --- ページごとの描画関数 ---
 
 ### フェーズ2: ログイン時の読み込みを自由票に対応 ###
@@ -578,22 +599,156 @@ def render_free_vote_page():
                 render_photo_component(photo['id'], context='free_vote', key_prefix="all")
     # --- ここまで ---
     
-    st.write("")
-    if st.button("全ての投票を完了する", type="primary"):
-        with st.spinner("最終投票を保存しています..."):
-            # 正しい引数を渡す
-            save_all_progress(
-                st.session_state.user_name,
-                st.session_state.voted_for,
-                st.session_state.favorites,
-                st.session_state.free_votes
-            )
-            # 保存後はdirtyフラグをリセット
-            st.session_state.dirty = False
+    st.write("") # スペーサー
+
+    # 投票完了フラグに応じて、表示するボタンを切り替える
+    if not st.session_state.get('voting_complete', False):
+        # --- 1. まだ投票完了ボタンを押していない場合 ---
+        if st.button("全ての投票を完了する", type="primary", use_container_width=True):
+            with st.spinner("最終投票を保存しています..."):
+                save_all_progress(
+                    st.session_state.user_name,
+                    st.session_state.voted_for,
+                    st.session_state.favorites,
+                    st.session_state.free_votes
+                )
+                st.session_state.dirty = False
+            
+            st.balloons()
+            st.success("投票が完了しました！") # メッセージを簡潔に変更
+            
+            # --- ここでフラグを立て、ページをリロードする ---
+            st.session_state.voting_complete = True
+            time.sleep(1.5) # バルーンとメッセージを 1.5秒 見せる
+            st.rerun()
+
+    else:
+        # --- 2. 投票完了ボタンを押した後 ---
+        st.success("投票お疲れ様でした！") # 完了メッセージを表示
         
-        st.balloons()
-        st.success("投票が完了しました！ご協力ありがとうございました。")
-        st.info("このタブは閉じて構いません。")
+        # 「結果を見る」ボタンを表示
+        if st.button("🏆 最終結果を見る", type="primary", use_container_width=True):
+            st.session_state.view = 'results'
+            st.session_state.needs_scroll = True
+            st.rerun()
+
+### フェーズ3: 結果発表ページ (同率順位対応・バグ修正版) ###
+def render_results_page():
+    if st.session_state.get('needs_scroll', False):
+        scroll_to_top()
+        st.session_state.needs_scroll = False
+    
+    st.header("🏆 総合結果発表 🏆")
+
+    if st.button("◀️ 投票ページに戻る"):
+        transition_and_save_in_background(view='free_vote')
+
+    # --- 1. スプレッドシートから「集計済みのスコア」を取得 ---
+    scores_data = fetch_processed_results(st.session_state.gc)
+    if scores_data is None:
+        st.error("集計結果シートの読み込みに失敗しました。")
+        st.warning(f"スプレッドシートに「{RESULTS_SHEET_NAME}」という名前のシートがあり、データが入力されているか確認してください。")
+        return
+
+    # --- 2. アプリが起動時に読み込んだ「写真マスタ」を取得 ---
+    if not st.session_state.photo_id_map:
+        st.error("写真マスタ（photo_id_map）が読み込まれていません。")
+        return
+
+    try:
+        # --- 3. 2つのデータをPython（Pandas）で結合 ---
+        scores_df = pd.DataFrame(scores_data)
+        required_score_cols = ['写真ID', 'スコア']
+        if not all(col in scores_df.columns for col in required_score_cols):
+            st.error(f"集計シートに必要な列（'写真ID', 'スコア'）がありません。")
+            return
+
+        master_df = pd.DataFrame.from_dict(st.session_state.photo_id_map, orient='index')
+        master_df.index.name = '写真ID'
+        master_df = master_df.reset_index()
+
+        results_df = pd.merge(master_df, scores_df, on="写真ID", how="left")
+        
+        results_df[['スコア']] = results_df[['スコア']].fillna(0)
+        results_df['スコア'] = pd.to_numeric(results_df['スコア'], errors='coerce').fillna(0).astype(int)
+        
+        # スコア順にソート
+        results_df = results_df.sort_values('スコア', ascending=False).reset_index(drop=True)
+
+        # --- ▼▼▼ ここから同率順位の対処 ▼▼▼ ---
+        # 'min' method: 同点の場合、グループ内の最小順位を全員に割り当てる
+        # (例: スコア 100, 90, 90, 80 -> 順位 1, 2, 2, 4)
+        results_df['順位'] = results_df['スコア'].rank(method='min', ascending=False).astype(int)
+        # --- ▲▲▲ ここまで ▲▲▲ ---
+
+        display_cols = ['submitter', 'title', 'スコア'] 
+
+        # --- 4. 結果の表示 (画像表示スタイル) ---
+
+        # --- ① トップ5の発表 ---
+        st.subheader("🎉 トップ5入賞作品")
+        top_5_df = results_df.head(5)
+        
+        for index, row in top_5_df.iterrows():
+            # --- ▼▼▼ 順位の参照を row['順位'] に変更 ▼▼▼ ---
+            st.markdown(f"### <span style='color: gold;'>【第 {row['順位']} 位】</span> スコア: {row['スコア']}", unsafe_allow_html=True)
+            st.subheader(f"【{row['submitter']}】 {row['title']}")
+            
+            original_thumbnail_link = row.get('thumbnail')
+            # ユーザーが設定した変数 THUMBNAIL_SIZE_PX_RESULT を使用
+            sized_thumbnail_link = get_sized_thumbnail_link(original_thumbnail_link, size=THUMBNAIL_SIZE_PX_RESULT)
+            thumbnail_content = get_thumbnail_photo(st.session_state.drive, sized_thumbnail_link)
+            if thumbnail_content:
+                st.image(thumbnail_content)
+            else:
+                st.error("画像読み込みエラー")
+            st.write("---")
+
+        # --- ② 全体ランキング ---
+        with st.expander("6位以下の全ランキングを見る"):
+            remaining_df = results_df.iloc[5:]
+            if remaining_df.empty:
+                st.info("6位以下の作品はありません。")
+            else:
+                for index, row in remaining_df.iterrows():
+                    # --- ▼▼▼ 順位の参照を row['順位'] に変更 ▼▼▼ ---
+                    st.markdown(f"**【第 {row['順位']} 位】 スコア: {row['スコア']}**", unsafe_allow_html=True)
+                    st.subheader(f"【{row['submitter']}】 {row['title']}")
+                    
+                    original_thumbnail_link = row.get('thumbnail')
+                    sized_thumbnail_link = get_sized_thumbnail_link(original_thumbnail_link, size=THUMBNAIL_SIZE_PX_RESULT)
+                    thumbnail_content = get_thumbnail_photo(st.session_state.drive, sized_thumbnail_link)
+                    if thumbnail_content:
+                        st.image(thumbnail_content, use_container_width=True)
+                    st.write("---")
+
+        st.write("") # スペーサー
+        
+        # --- ③ 自分の作品の票数 ---
+        st.subheader("マイページ：自分の作品の票数")
+        my_name = st.session_state.user_name
+        
+        my_results_df = results_df[results_df['submitter'] == my_name].sort_values('スコア', ascending=False)
+        
+        if my_results_df.empty:
+            st.warning(f"「{my_name}」さんの出品作品が見つかりませんでした。")
+        else:
+            for index, row in my_results_df.iterrows():
+                # --- ▼▼▼ 順位の参照を row['順位'] に変更 ▼▼▼ ---
+                # (バグ修正: index + 1 ではなく、row['順位'] を使う)
+                st.markdown(f"**【全体 {row['順位']} 位】 スコア: {row['スコア']}**", unsafe_allow_html=True)
+                st.subheader(f"【{row['submitter']}】 {row['title']}")
+                
+                original_thumbnail_link = row.get('thumbnail')
+                sized_thumbnail_link = get_sized_thumbnail_link(original_thumbnail_link, size=THUMBNAIL_SIZE_PX_RESULT)
+                thumbnail_content = get_thumbnail_photo(st.session_state.drive, sized_thumbnail_link)
+                if thumbnail_content:
+                    st.image(thumbnail_content, use_container_width=True)
+                st.write("---")
+
+    except Exception as e:
+        st.error(f"結果の表示中にエラーが発生しました: {e}")
+        logger.exception("結果ページの描画エラー")
 
 # --- メイン処理 ---
 def main():
@@ -608,6 +763,7 @@ def main():
         st.session_state.current_index = 0
         st.session_state.dirty = False
         st.session_state.needs_scroll = False
+        st.session_state.voting_complete = False
         
         # 時間のかかる処理はスピナーの中で行う
         with st.spinner("アプリを起動しています..."):
@@ -667,6 +823,8 @@ def main():
         render_favorites_page()
     elif st.session_state.view == 'free_vote':
         render_free_vote_page()
-
+    elif st.session_state.view == 'results': # <-- ここから
+        render_results_page()                # <-- ここまでを
+                                             # <-- まるごと追加
 if __name__ == "__main__":
     main()
