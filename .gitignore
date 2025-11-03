@@ -10,4 +10,5 @@ __pycache__/
 .DS_Store
 
 #秘匿
-photovotingapp-476406-eb39e1d21798.json
+.photovotingapp-476406-eb39e1d21798.json
+.streamlit/
