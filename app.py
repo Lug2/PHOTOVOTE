@@ -708,8 +708,10 @@ def render_free_vote_page():
         if st.button("全ての投票を完了する", type="primary", use_container_width=True):
             with st.spinner("最終投票を保存しています..."):
                 save_all_progress(
-                    st.session_state.user_name, st.session_state.voted_for,
-                    st.session_state.favorites, st.session_state.free_votes
+                    st.session_state.user_name, 
+                    st.session_state.voted_for,
+                    st.session_state.favorites, 
+                    st.session_state.free_votes, # <-- カンマを追加
                     st.session_state.save_lock
                 )
                 st.session_state.dirty = False
