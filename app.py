@@ -710,6 +710,7 @@ def render_free_vote_page():
                 save_all_progress(
                     st.session_state.user_name, st.session_state.voted_for,
                     st.session_state.favorites, st.session_state.free_votes
+                    st.session_state.save_lock
                 )
                 st.session_state.dirty = False
             
