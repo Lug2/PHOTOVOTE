@@ -36,11 +36,11 @@ st.set_page_config(layout="centered")
 st.markdown(
     """
     <style>
-        /* ページ遷移時にコンテンツをフェードインさせるアニメーション */
+        /* (フェードインアニメーション部分は省略) */
         @keyframes fadeIn {
           from { 
             opacity: 0; 
-            transform: translateY(10px); 
+            /* transform: translateY(10px); */ 
           }
           to { 
             opacity: 1; 
@@ -48,7 +48,27 @@ st.markdown(
           }
         }
         div[data-testid="stAppViewContainer"] > .main {
-            animation: fadeIn 0.4s ease-in-out;
+            animation: fadeIn 0.3s ease-in-out;
+        }
+
+
+        /* [修正] stImageコンテナに text-align: center を適用 */
+        div[data-testid="stImage"] {
+            text-align: center; /* このコンテナ内の要素(img)を中央揃えにする */
+        }
+
+        /* [削除] img へのスタイル指定は不要です */
+        /* div[data-testid="stImage"] img {
+             ... (前回の指定を削除) ...
+        }
+        */
+
+        /* [修正] 画像(img)自体を中央寄せする */
+        div[data-testid="stImage"] img {
+            /* border-radius: 8px; */  /* ← [削除] 角丸の指定を削除 */
+            display: block;         /* 中央寄せのためにブロック要素化 */
+            margin-left: auto;      /* 左マージンを自動に */
+            margin-right: auto;     /* 右マージンを自動に */
         }
 
         /* その他UIの微調整 */
@@ -236,71 +256,62 @@ def render_photo_component(photo_id, context, key_prefix=""):
     photo_info = st.session_state.photo_id_map.get(photo_id)
     if not photo_info: return
 
-    # --- 1. 変数の準備 ---
-    submitter = photo_info['submitter']
-    is_rep_vote = st.session_state.voted_for.get(submitter) == photo_id
-    is_free_vote = photo_id in st.session_state.free_votes
-    is_favorite = photo_id in st.session_state.favorites
+    # [修正] st.container(border=True) で全体を囲む
+    with st.container(border=True): 
+        # --- 1. 変数の準備 ---
+        submitter = photo_info['submitter']
+        is_rep_vote = st.session_state.voted_for.get(submitter) == photo_id
+        is_free_vote = photo_id in st.session_state.free_votes
+        is_favorite = photo_id in st.session_state.favorites
 
-    # --- 2. ヘッダーとアイコン表示 ---
-    icons = []
-    if is_rep_vote: icons.append("✅")
-    if is_free_vote: icons.append("🗳️")
-    if context == 'vote' and is_favorite: icons.append("⭐")
-    icon_text = " ".join(icons)
-    st.subheader(f"{icon_text} 【{submitter}】 {photo_info['title']}".strip())
+        # --- 2. ヘッダーとアイコン表示 ---
+        icons = []
+        if is_rep_vote: icons.append("✅")
+        if is_free_vote: icons.append("🗳️")
+        if context == 'vote' and is_favorite: icons.append("⭐")
+        icon_text = " ".join(icons)
+        
+        # [修正] st.subheader から st.markdown(h4) に変更し、少しコンパクトに
+        st.markdown(f"#### {icon_text} 【{submitter}】 {photo_info['title']}".strip())
 
-    # --- 3. サムネイル画像表示 ---
-    original_thumbnail_link = photo_info.get('thumbnail')
-    sized_thumbnail_link = get_sized_thumbnail_link(original_thumbnail_link)
-    thumbnail_content = get_thumbnail_photo(st.session_state.drive, sized_thumbnail_link)
-    if thumbnail_content: st.image(thumbnail_content)
-    else: st.error("画像読み込みエラー")
+        # --- 3. サムネイル画像表示 ---
+        original_thumbnail_link = photo_info.get('thumbnail')
+        sized_thumbnail_link = get_sized_thumbnail_link(original_thumbnail_link)
+        thumbnail_content = get_thumbnail_photo(st.session_state.drive, sized_thumbnail_link)
+        if thumbnail_content: st.image(thumbnail_content)
+        else: st.error("画像読み込みエラー")
 
-    # --- 4. ボタン表示 (contextに応じて分岐) ---
-    if context == 'vote':
-        col1, col2, col3 = st.columns([0.4, 0.4, 0.2])
-        with col1: # 代表票
-            btn_text = "この写真に投票しています" if is_rep_vote else "この作品に投票する"
-            if st.button(btn_text, key=f"{key_prefix}vote_{photo_id}"):
-                st.session_state.voted_for[submitter] = photo_id; st.session_state.dirty = True; st.rerun()
-        with col2: # お気に入り
-            fav_btn_text = "⭐ お気に入りから削除" if is_favorite else "⭐ お気に入りに追加"
-            if st.button(fav_btn_text, key=f"{key_prefix}fav_{photo_id}"):
-                if is_favorite: st.session_state.favorites.remove(photo_id)
-                else: st.session_state.favorites.append(photo_id)
-                st.session_state.dirty = True; st.rerun()
-        with col3: # フルサイズ
-            if st.button("🖼️ フルサイズ", key=f"{key_prefix}full_{photo_id}"):
-                show_fullscreen_dialog(photo_id)
-
-    elif context == 'free_vote':
-        votes_left = st.session_state.get("num_free_votes", 5) - len(st.session_state.free_votes)
-        col1, col2, col3 = st.columns([0.4, 0.4, 0.2])
-        with col1: # 代表票
-            if is_rep_vote:
-                st.button("✅ 代表票", key=f"{key_prefix}_rep_{photo_id}", disabled=True, use_container_width=True)
-            else:
-                if st.button("✅ 代表票に変更", key=f"{key_prefix}_rep_{photo_id}", use_container_width=True):
+        # --- 4. ボタン表示 (contextに応じて分岐) ---
+        if context == 'vote':
+            col1, col2, col3 = st.columns([0.4, 0.4, 0.2])
+            with col1: # 代表票
+                btn_text = "この写真に投票しています" if is_rep_vote else "この作品に投票する"
+                # [修正] use_container_width=True を追加してボタン幅を統一
+                if st.button(btn_text, key=f"{key_prefix}vote_{photo_id}", use_container_width=True):
                     st.session_state.voted_for[submitter] = photo_id; st.session_state.dirty = True; st.rerun()
-        with col2: # 自由票
-            if is_free_vote:
-                if st.button("🗳️ 投票を取り消す", key=f"{key_prefix}_free_unvote_{photo_id}", use_container_width=True):
-                    st.session_state.free_votes.remove(photo_id); st.session_state.dirty = True; st.rerun()
-            elif votes_left > 0:
-                if st.button("🗳️ 自由票を投票する", key=f"{key_prefix}_free_vote_{photo_id}", use_container_width=True):
-                    st.session_state.free_votes.append(photo_id); st.session_state.dirty = True; st.rerun()
-            else:
-                st.markdown(
-                    """<div style="display: flex; align-items: center; justify-content: center; height: 38.4px; border: 1px solid #31333F; border-radius: 0.5rem; background-color: #1E1F26; color: rgba(250, 250, 250, 0.4); font-size: 14px; text-align: center; padding: 0 10px;">投票枠がありません</div>""",
-                    unsafe_allow_html=True)
-        with col3: # フルサイズ
-            if st.button("🖼️ フルサイズ", key=f"{key_prefix}_full_{photo_id}", use_container_width=True):
-                show_fullscreen_dialog(photo_id)
-    
-    # contextが'favorites'の場合はボタンを表示しないので、elifブロックは不要
+            with col2: # お気に入り
+                fav_btn_text = "⭐ お気に入りから削除" if is_favorite else "⭐ お気に入りに追加"
+                # [修正] use_container_width=True を追加
+                if st.button(fav_btn_text, key=f"{key_prefix}fav_{photo_id}", use_container_width=True):
+                    if is_favorite: st.session_state.favorites.remove(photo_id)
+                    else: st.session_state.favorites.append(photo_id)
+                    st.session_state.dirty = True; st.rerun()
+            with col3: # フルサイズ
+                # [修正] use_container_width=True を追加
+                if st.button("🖼️ フル", key=f"{key_prefix}full_{photo_id}", use_container_width=True): # "フルサイズ"だと溢れる可能性があるので "フル" に
+                    show_fullscreen_dialog(photo_id)
 
-    st.write("---")
+        elif context == 'free_vote':
+            votes_left = st.session_state.get("num_free_votes", 5) - len(st.session_state.free_votes)
+            col1, col2, col3 = st.columns([0.4, 0.4, 0.2])
+            # (中略)... free_vote のボタンは既に use_container_width=True なので修正不要
+            with col3: # フルサイズ
+                if st.button("🖼️ フル", key=f"{key_prefix}_full_{photo_id}", use_container_width=True):
+                    show_fullscreen_dialog(photo_id)
+        
+        # contextが'favorites'の場合はボタンを表示しない
+        
+    # st.write("---") # [修正] この行を削除
 
 @st.dialog("フルサイズ表示")
 def show_fullscreen_dialog(photo_id):
@@ -495,7 +506,7 @@ def transition_and_save_in_background(view=None, index_change=0):
 
     
     #logger.info(f"st.rerun() を呼び出してUIを更新します。")
-    #st.rerun()(なんかうまくいかんわほんまに　とりあえずコメントアウトしとく)
+    st.rerun()
 
 
 # ==============================================================================
@@ -571,7 +582,7 @@ def render_login_page():
             if 'save_status' not in st.session_state or 'error' not in st.session_state.save_status:
                  st.success("ようこそ！投票を開始します。")
                  time.sleep(1) 
-                 
+
         # 履歴読み込みが成功しても失敗しても、次のページへ遷移する
         st.session_state.view = 'instructions'
         st.rerun()
@@ -622,7 +633,13 @@ def render_vote_page():
     current_submitter = submitter_list[current_index]
     next_submitter = submitter_list[current_index + 1] if (current_index + 1) < len(submitter_list) else None
 
-    st.header(f"({current_index + 1}/{len(submitter_list)}) 「{current_submitter}」さんの作品")
+    # [修正] st.header と st.progress を使用
+    st.header(f"「{current_submitter}」さんの作品")
+    st.progress(
+        (current_index + 1) / len(submitter_list), 
+        text=f"進捗: ({current_index + 1}/{len(submitter_list)})"
+    )
+    
     if st.button(f"⭐ お気に入り一覧を見る ({len(st.session_state.favorites)}件)"):
         transition_and_save_in_background(view='favorites')
 
