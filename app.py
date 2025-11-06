@@ -263,9 +263,16 @@ def get_sized_thumbnail_link(original_link, size=THUMBNAIL_SIZE_PX):
 def scroll_to_top():
     """
     ページ遷移時に画面のトップまでスムーズにスクロールさせるJavaScriptを実行する。
+    [修正] setTimeout を使い、DOMの描画完了を待つ
     """
     components.html(
-        """<script>window.parent.document.querySelector(".main").scrollTo({top: 0, behavior: 'smooth'});</script>""",
+        """
+        <script>
+            setTimeout(function() {
+                window.parent.document.querySelector(".main").scrollTo({top: 0, behavior: 'auto'});
+            }, 50); // 50ミリ秒(0.05秒)待ってから実行
+        </script>
+        """,
         height=0
     )
 
