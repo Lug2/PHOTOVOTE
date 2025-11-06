@@ -89,7 +89,6 @@ st.markdown(
 )
 
 # --- secrets.tomlから読み込む設定値 ---
-JSON_KEY_FILE = st.secrets["json_key_file"]
 TARGET_FOLDER_ID = st.secrets["target_folder_id"]
 SPREADSHEET_NAME = st.secrets["spreadsheet_name"]
 VOTE_SHEET_NAME = st.secrets["vote_sheet_name"]
