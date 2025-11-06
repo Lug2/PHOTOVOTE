@@ -110,6 +110,7 @@ FILENAME_PATTERN = re.compile(r"^(.+?)(\d{2})(.+?)\..+$")
 # 2. 認証とデータ取得 (Google API関連)
 # ==============================================================================
 
+# [変更後]
 @st.cache_resource
 def authorize_services():
     """
@@ -118,11 +119,18 @@ def authorize_services():
     """
     try:
         logger.info("Googleサービスの認証を開始。")
-        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_file(JSON_KEY_FILE, scopes=scopes)
+        scopes = ["https.www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        
+        # ▼▼▼ SCCのSecrets(辞書)から直接認証情報を読み込むように変更 ▼▼▼
+        # st.secrets["gcp_service_account"] にはJSONキーの内容(辞書)が入る
+        creds_dict = st.secrets["gcp_service_account"] 
+        
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         gc = gspread.authorize(creds)
         
-        settings = {"client_config_backend": "service", "service_config": {"client_json_file_path": JSON_KEY_FILE}}
+        settings = {"client_config_backend": "service", "service_config": {"client_json": creds_dict}}
+        # ▲▲▲ ここまで ▲▲▲
+
         gauth = GoogleAuth(settings=settings)
         gauth.ServiceAuth()
         drive = GoogleDrive(gauth)
@@ -134,6 +142,7 @@ def authorize_services():
         st.error("Googleサービスへの接続に失敗しました。認証情報ファイルを確認してください。")
         st.stop()
 
+# [変更後]
 def authorize_services_for_thread():
     """
     バックグラウンドスレッド (データ保存用) で使用するための、gspread認証関数。
@@ -141,7 +150,9 @@ def authorize_services_for_thread():
     """
     try:
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_file(JSON_KEY_FILE, scopes=scopes)
+        # ▼▼▼ SCCのSecrets(辞書)から直接認証情報を読み込むように変更 ▼▼▼
+        creds_dict = st.secrets["gcp_service_account"]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         return gspread.authorize(creds)
     except Exception:
         logger.exception("バックグラウンドスレッドでのGoogleサービス認証中にエラーが発生。")
