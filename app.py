@@ -262,22 +262,16 @@ def get_sized_thumbnail_link(original_link, size=THUMBNAIL_SIZE_PX):
 
 def scroll_to_top():
     """
-    ページ遷移時に画面のトップまでスムーズにスクロールさせるJavaScriptを実行する。
-    [修正] 待機時間を延長し、スクロール対象のセレクタを補強
+    ページ遷移時に画面のトップまで瞬時にスクロールさせるJavaScriptを実行する。
+    [修正] setTimeout を削除し、瞬時移動(auto)のみにする
     """
     components.html(
         """
         <script>
-            setTimeout(function() {
-                // Streamlitのメインのスクロール領域（.main）を探す
-                // 見つからない場合は、アプリ全体のコンテナ（stAppViewContainer）を試す
-                var main = window.parent.document.querySelector(".main") || window.parent.document.querySelector('[data-testid="stAppViewContainer"]');
-                
-                if (main) {
-                    // behavior: 'auto' で瞬時に移動させる（'smooth' だとガクガクの原因になる）
-                    main.scrollTo({top: 0, behavior: 'auto'});
-                }
-            }, 100); // 待機時間を 50ms から 100ms (0.1秒) に延長
+            var main = window.parent.document.querySelector(".main");
+            if (main) {
+                main.scrollTo({top: 0, behavior: 'auto'});
+            }
         </script>
         """,
         height=0
@@ -689,8 +683,8 @@ def render_instructions_page():
 
 def render_vote_page():
     """Phase 1: 代表票を投票するページを描画する。"""
-    if st.session_state.get('needs_scroll', False):
-        scroll_to_top(); st.session_state.needs_scroll = False
+    #if st.session_state.get('needs_scroll', False):
+       # scroll_to_top(); st.session_state.needs_scroll = False
     
     current_index = st.session_state.current_index
     submitter_list = st.session_state.submitter_list
@@ -728,6 +722,11 @@ def render_vote_page():
         for photo in photos_to_preload:
             link = get_sized_thumbnail_link(photo.get('thumbnail'))
             get_thumbnail_photo(st.session_state.drive, link)
+
+    # --- [修正] ページ描画の最後にスクロール処理を実行 ---
+    if st.session_state.get('needs_scroll', False):
+        scroll_to_top()
+        st.session_state.needs_scroll = False
 
 def render_favorites_page():
     """お気に入りに追加した写真の一覧ページを描画する。"""
