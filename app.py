@@ -13,6 +13,7 @@ import logging
 from PIL import Image
 import base64
 import pandas as pd
+import json
 
 # [修正] グローバルなロックオブジェクトは st.session_state に保存して、
 # st.rerun() をまたいで永続化させる
@@ -109,7 +110,6 @@ FILENAME_PATTERN = re.compile(r"^(.+?)(\d{2})(.+?)\..+$")
 # 2. 認証とデータ取得 (Google API関連)
 # ==============================================================================
 
-# [変更後]
 @st.cache_resource
 def authorize_services():
     """
@@ -118,20 +118,30 @@ def authorize_services():
     """
     try:
         logger.info("Googleサービスの認証を開始。")
-        scopes = ["https.www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        
-        # ▼▼▼ SCCのSecrets(辞書)から直接認証情報を読み込むように変更 ▼▼▼
-        # st.secrets["gcp_service_account"] にはJSONキーの内容(辞書)が入る
+        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+
+        # SCCのSecrets(辞書)から認証情報を読み込む
         creds_dict = st.secrets["gcp_service_account"] 
         
+        # 1. gspread の認証 (辞書をそのまま渡す)
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         gc = gspread.authorize(creds)
         
-        settings = {"client_config_backend": "service", "service_config": {"client_json": creds_dict}}
-        # ▲▲▲ ここまで ▲▲▲
+        # 2. PyDrive2 の認証 (辞書をJSON文字列に変換して渡す)
+        
+        # ▼▼▼【重要】辞書(AttrDict)を標準のdictに変換し、JSON文字列(str)に変換する ▼▼▼
+        creds_json_str = json.dumps(dict(creds_dict))
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
+        settings = {
+            "client_config_backend": "service",
+            "service_config": {
+                "client_json": creds_json_str  # JSON文字列を渡す
+            }
+        }
+        
         gauth = GoogleAuth(settings=settings)
-        gauth.ServiceAuth()
+        gauth.ServiceAuth() # ここでエラーが起きていた [cite: 1, 1435, 1437]
         drive = GoogleDrive(gauth)
         
         logger.info("Googleサービスの認証に成功。")
@@ -141,7 +151,7 @@ def authorize_services():
         st.error("Googleサービスへの接続に失敗しました。認証情報ファイルを確認してください。")
         st.stop()
 
-# [変更後]
+# [確認] (app.py 140行目あたり)
 def authorize_services_for_thread():
     """
     バックグラウンドスレッド (データ保存用) で使用するための、gspread認証関数。
@@ -149,6 +159,7 @@ def authorize_services_for_thread():
     """
     try:
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        
         # ▼▼▼ SCCのSecrets(辞書)から直接認証情報を読み込むように変更 ▼▼▼
         creds_dict = st.secrets["gcp_service_account"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
