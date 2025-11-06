@@ -323,14 +323,43 @@ def render_photo_component(photo_id, context, key_prefix=""):
                     show_fullscreen_dialog(photo_id)
 
         elif context == 'free_vote':
+            # --- [修正ここから] ---
+            # 変数を取得
             votes_left = st.session_state.get("num_free_votes", 5) - len(st.session_state.free_votes)
+            
+            # カラムを3つ用意
             col1, col2, col3 = st.columns([0.4, 0.4, 0.2])
-            # (中略)... free_vote のボタンは既に use_container_width=True なので修正不要
+
+            # --- 1. col1 (自由票ボタン) ---
+            with col1:
+                if is_free_vote:
+                    # 既に自由票を投票済みの場合
+                    if st.button("🗳️ 自由票を取り消す", key=f"{key_prefix}_free_remove_{photo_id}", use_container_width=True):
+                        st.session_state.free_votes.remove(photo_id)
+                        st.session_state.dirty = True
+                        st.rerun()
+                elif votes_left > 0:
+                    # まだ投票しておらず、票が残っている場合
+                    if st.button(f"🗳️ 自由票を投票する (残り{votes_left})", key=f"{key_prefix}_free_add_{photo_id}", use_container_width=True):
+                        st.session_state.free_votes.append(photo_id)
+                        st.session_state.dirty = True
+                        st.rerun()
+                else:
+                    # まだ投票しておらず、票が残っていない場合
+                    st.button("🗳️ 自由票の枠がありません", key=f"{key_prefix}_free_disabled_{photo_id}", use_container_width=True, disabled=True)
+
+            # --- 2. col2 (代表票ボタン) ---
+            with col2:
+                btn_text = "✅ 代表票" if is_rep_vote else "代表票にする"
+                if st.button(btn_text, key=f"{key_prefix}_rep_vote_{photo_id}", use_container_width=True):
+                    st.session_state.voted_for[submitter] = photo_id
+                    st.session_state.dirty = True
+                    st.rerun()
+
+            # --- 3. col3 (フルサイズボタン) ---
             with col3: # フルサイズ
-                if st.button("🖼️ フル", key=f"{key_prefix}_full_{photo_id}", use_container_width=True):
+                if st.button("🖼️ フル", key=f"{key_prefix}_full_{photo_id}", use_container_width=True): # [修正] キー名も他のセクションと重複しないように変更
                     show_fullscreen_dialog(photo_id)
-        
-        # contextが'favorites'の場合はボタンを表示しない
         
     # st.write("---") # [修正] この行を削除
 
@@ -623,7 +652,7 @@ def render_instructions_page():
         - 好きな写真に自由に追加で投票できます（代表票の変更も可能です）。
         ---
         **このアプリについて**
-        - 600行ほどの感動するほどクリーンなPythonコードと、streamlitを使って構築されています。
+        - 864行の感動するほどクリーンなPythonコードと、streamlitを使って構築されています。
         - UIはちょっとゴミかもだけど、UXはめっちゃ考慮されてるので、感謝して投票してください。
         - 画面遷移時に画面がガクガクするのは仕様です。改善策を知ってるやつは俺に教えてくれマジで
 
