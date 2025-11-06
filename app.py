@@ -263,14 +263,21 @@ def get_sized_thumbnail_link(original_link, size=THUMBNAIL_SIZE_PX):
 def scroll_to_top():
     """
     ページ遷移時に画面のトップまでスムーズにスクロールさせるJavaScriptを実行する。
-    [修正] setTimeout を使い、DOMの描画完了を待つ
+    [修正] 待機時間を延長し、スクロール対象のセレクタを補強
     """
     components.html(
         """
         <script>
             setTimeout(function() {
-                window.parent.document.querySelector(".main").scrollTo({top: 0, behavior: 'auto'});
-            }, 50); // 50ミリ秒(0.05秒)待ってから実行
+                // Streamlitのメインのスクロール領域（.main）を探す
+                // 見つからない場合は、アプリ全体のコンテナ（stAppViewContainer）を試す
+                var main = window.parent.document.querySelector(".main") || window.parent.document.querySelector('[data-testid="stAppViewContainer"]');
+                
+                if (main) {
+                    // behavior: 'auto' で瞬時に移動させる（'smooth' だとガクガクの原因になる）
+                    main.scrollTo({top: 0, behavior: 'auto'});
+                }
+            }, 100); // 待機時間を 50ms から 100ms (0.1秒) に延長
         </script>
         """,
         height=0
