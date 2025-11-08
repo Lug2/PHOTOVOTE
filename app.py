@@ -612,21 +612,6 @@ def render_login_page():
         st.session_state.view = 'instructions'
         st.rerun()
 
-        # `with st.spinner` の外 (スピナーが消えた後) でメッセージを表示
-        
-        if total_loaded > 0:
-            st.success(f"前回の投票データ ({total_loaded}件) を読み込みました。続きから開始します。")
-            time.sleep(1.5) # ユーザーがメッセージを読むための時間
-        else:
-            # エラー時以外は、初回訪問時のメッセージを出す
-            if 'save_status' not in st.session_state or 'error' not in st.session_state.save_status:
-                 st.success("ようこそ！投票を開始します。")
-                 time.sleep(1) 
-
-        # 履歴読み込みが成功しても失敗しても、次のページへ遷移する
-        st.session_state.view = 'instructions'
-        st.rerun()
-
 def render_instructions_page():
     """説明ページと、最初の写真のプリロードを行う。"""
     st.header("投票へようこそ！")
