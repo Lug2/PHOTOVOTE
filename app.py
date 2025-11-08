@@ -92,8 +92,8 @@ st.markdown(
 # --- secrets.tomlから読み込む設定値 ---
 TARGET_FOLDER_ID = st.secrets["target_folder_id"]
 SPREADSHEET_NAME = st.secrets["spreadsheet_name"]
-VOTE_SHEET_NAME = st.secrets["vote_sheet_name"]
-FAV_SHEET_NAME = st.secrets["fav_sheet_name"]
+# [追加] 新しい UserData シートの定数を追加します。
+USER_DATA_SHEET_NAME = st.secrets.get("user_data_sheet_name", "UserData")
 RESULTS_SHEET_NAME = st.secrets.get("results_sheet_name", "集計結果") # 存在しない場合も考慮
 
 # --- アプリケーション全体で利用する定数 ---
@@ -386,134 +386,69 @@ def show_fullscreen_dialog(photo_id):
 # 4. データ保存とページ遷移
 # ==============================================================================
 
-def _get_row_ranges(rows):
-    """
-    [2, 3, 4, 8, 9, 11] のような行番号リストを、[(2, 4), (8, 9), (11, 11)] のような
-    連続した範囲のタプルのリストに変換する内部ヘルパー関数。batch_update用。
-    """
-    if not rows: return []
-    ranges, start = [], sorted(list(set(rows)))[0]
-    end = start
-    for row in sorted(list(set(rows)))[1:]:
-        if row == end + 1: end = row
-        else: ranges.append((start, end)); start = end = row
-    ranges.append((start, end))
-    return ranges
 
-# app.py
-
-# [修正] 5つ目の引数として lock を追加
-def save_all_progress(user_name, voted_for_map, favorites_list, free_votes_list, lock):
+# [変更後] 新しいKVSモデル（UserData）に対応した保存関数
+def save_all_progress(user_name, user_row_index, json_voted, json_free, json_fav, timestamp_str, lock):
     """
-    [デバッグ強化版] ユーザーの全投票データをスプレッドシートに保存する。
-    同時に複数の保存処理が走らないようにLockで排他制御を行う。
+    [KVSモデル版] ユーザーの全投票データをスプレッドシートの特定行にピンポイントで保存する。
+    シグネチャ（引数）が変更されており、st.session_stateに依存しない値を受け取る。
     """
     
     # --- 0. ロックの試行 ---
-    logger.info(f"ユーザー '{user_name}': 保存スレッド開始。ロック取得を試みます。")
+    logger.info(f"ユーザー '{user_name}': 保存スレッド開始 (対象行: {user_row_index})。ロック取得試行。")
     
-    # [修正] 'st.session_state.save_lock' ではなく、引数 'lock' を使用する
-    #  -> これで引数 'lock' が正しく渡され、NameError も起きなくなる
     if not lock.acquire(blocking=False):
-        logger.warning(f"ユーザー '{user_name}': ロック取得失敗。既に別の保存処理が実行中です。このスレッドは終了します。")
-        # st.session_state への書き込みは（比較的）安全なため、ここは残す
+        logger.warning(f"ユーザー '{user_name}': ロック取得失敗。別スレッド実行中のため終了。")
         st.session_state.save_status = "skipped: saving in progress" 
         return
 
-    logger.info(f"ユーザー '{user_name}': ロック取得成功。保存処理を開始します。")
+    logger.info(f"ユーザー '{user_name}': ロック取得成功。保存処理 (対象行: {user_row_index}) を開始。")
     
-    # [デバッグ] 保存対象のデータ数をログに出力
-    logger.info(f"ユーザー '{user_name}': 保存対象データ: "
-                f"代表票={len(voted_for_map)}, "
-                f"自由票={len(free_votes_list)}, "
-                f"お気に入り={len(favorites_list)}")
-
     try:
         # --- 1. スレッド用認証 ---
         logger.info(f"ユーザー '{user_name}': GSpread認証 (スレッド用) を開始。")
         gc_thread = authorize_services_for_thread()
         if not gc_thread: 
-            logger.error(f"ユーザー '{user_name}': GSpread認証 (スレッド用) に失敗。保存を中断。")
+            logger.error(f"ユーザー '{user_name}': GSpread認証 (スレッド用) に失敗。保存中断。")
             st.session_state.save_status = "error: GSpread認証失敗"; return
         
         logger.info(f"ユーザー '{user_name}': GSpread認証成功。スプレッドシート '{SPREADSHEET_NAME}' を開きます。")
         spreadsheet = gc_thread.open(SPREADSHEET_NAME)
+        
+        # --- 2. UserDataシートを開き、更新範囲とペイロードを定義 ---
+        sheet_userdata = spreadsheet.worksheet(USER_DATA_SHEET_NAME)
+        
+        # B列 (代表票_json) から E列 (最終更新日時) までを更新
+        range_to_update = f'B{user_row_index}:E{user_row_index}'
+        
+        # gspread.update() は「リストのリスト（二次元配列）」を要求する
+        values_to_write = [[json_voted, json_free, json_fav, timestamp_str]]
+        
+        logger.info(f"ユーザー '{user_name}': sheet.update(range='{range_to_update}') をAPIコールします。")
 
-        # --- 2. 既存データの削除 (投票) ---
-        logger.info(f"ユーザー '{user_name}': [削除フェーズ-VOTE] '{VOTE_SHEET_NAME}' シートの全レコード取得を開始。")
-        sheet_votes = spreadsheet.worksheet(VOTE_SHEET_NAME)
-        all_votes_records = sheet_votes.get_all_records()
-        logger.info(f"ユーザー '{user_name}': [削除フェーズ-VOTE] 全 {len(all_votes_records)} 件のレコードを取得完了。")
+        # --- 3. データのピンポイント更新 (APIコール 1回) ---
+        sheet_userdata.update(
+            range_to_update,
+            values_to_write,
+            value_input_option='USER_ENTERED'
+        )
         
-        rows_to_delete = [i + 2 for i, r in enumerate(all_votes_records) if r.get('投票者') == user_name]
-        
-        if rows_to_delete:
-            logger.info(f"ユーザー '{user_name}': [削除フェーズ-VOTE] {len(rows_to_delete)} 行の既存データを発見。削除対象行: {rows_to_delete}")
-            requests = [{"deleteDimension": {"range": {"sheetId": sheet_votes.id, "dimension": "ROWS", "startIndex": s - 1, "endIndex": e}}} for s, e in reversed(_get_row_ranges(rows_to_delete))]
-            logger.info(f"ユーザー '{user_name}': [削除フェーズ-VOTE] batch_update (削除) APIを呼び出します。")
-            spreadsheet.batch_update({"requests": requests})
-            logger.info(f"ユーザー '{user_name}': [削除フェーズ-VOTE] batch_update (削除) が完了。")
-        else:
-            logger.info(f"ユーザー '{user_name}': [削除フェーズ-VOTE] 既存の投票データは見つかりませんでした。削除をスキップ。")
-
-        # --- 3. 既存データの削除 (お気に入り) ---
-        logger.info(f"ユーザー '{user_name}': [削除フェーズ-FAV] '{FAV_SHEET_NAME}' シートの全レコード取得を開始。")
-        sheet_favorites = spreadsheet.worksheet(FAV_SHEET_NAME)
-        all_favs_records = sheet_favorites.get_all_records()
-        logger.info(f"ユーザー '{user_name}': [削除フェーズ-FAV] 全 {len(all_favs_records)} 件のレコードを取得完了。")
-        
-        rows_to_delete_favs = [i + 2 for i, r in enumerate(all_favs_records) if r.get('投票者') == user_name]
-        
-        if rows_to_delete_favs:
-            logger.info(f"ユーザー '{user_name}': [削除フェーズ-FAV] {len(rows_to_delete_favs)} 行の既存データを発見。削除対象行: {rows_to_delete_favs}")
-            requests_favs = [{"deleteDimension": {"range": {"sheetId": sheet_favorites.id, "dimension": "ROWS", "startIndex": s - 1, "endIndex": e}}} for s, e in reversed(_get_row_ranges(rows_to_delete_favs))]
-            logger.info(f"ユーザー '{user_name}': [削除フェーズ-FAV] batch_update (削除) APIを呼び出します。")
-            spreadsheet.batch_update({"requests": requests_favs})
-            logger.info(f"ユーザー '{user_name}': [削除フェーズ-FAV] batch_update (削除) が完了。")
-        else:
-            logger.info(f"ユーザー '{user_name}': [削除フェーズ-FAV] 既存のお気に入りデータは見つかりませんでした。削除をスキップ。")
-            
-        # --- 4. 新しいデータの追加 ---
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        new_vote_rows = [[user_name, pid, '代表票', timestamp] for pid in voted_for_map.values()]
-        new_free_vote_rows = [[user_name, pid, '自由票', timestamp] for pid in free_votes_list]
-        total_new_votes = new_vote_rows + new_free_vote_rows
-        
-        if total_new_votes:
-            logger.info(f"ユーザー '{user_name}': [追加フェーズ-VOTE] {len(total_new_votes)} 行の新しい投票データを追加します。")
-            sheet_votes.append_rows(total_new_votes, value_input_option='USER_ENTERED')
-            logger.info(f"ユーザー '{user_name}': [追加フェーズ-VOTE] append_rows (追加) が完了。")
-        else:
-            logger.info(f"ユーザー '{user_name}': [追加フェーズ-VOTE] 新しい投票データはありません。追加をスキップ。")
-        
-        new_fav_rows = [[user_name, pid] for pid in favorites_list]
-        if new_fav_rows:
-            logger.info(f"ユーザー '{user_name}': [追加フェーズ-FAV] {len(new_fav_rows)} 行の新しいお気に入りデータを追加します。")
-            sheet_favorites.append_rows(new_fav_rows, value_input_option='USER_ENTERED')
-            logger.info(f"ユーザー '{user_name}': [追加フェーズ-FAV] append_rows (追加) が完了。")
-        else:
-            logger.info(f"ユーザー '{user_name}': [追加フェーズ-FAV] 新しいお気に入りデータはありません。追加をスキップ。")
-        
-        # --- 5. 完了処理 ---
-        logger.info(f"ユーザー '{user_name}': 全てのデータ保存処理が【正常に完了】しました。")
+        # --- 4. 完了処理 ---
+        logger.info(f"ユーザー '{user_name}': データ保存処理 (対象行: {user_row_index}) が【正常に完了】しました。")
         st.session_state.save_status = "success"
-        st.session_state.dirty = False # [修正] 正常に完了した場合のみ dirty フラグを False にする
+        st.session_state.dirty = False # 正常に完了した場合のみ dirty フラグを False にする
         
     except Exception as e:
-        # [修正] logger.exception を使うと、ターミナルに完全なスタックトレース(エラー詳細)が出力される
-        logger.exception(f"ユーザー '{user_name}' のデータ保存中に【重大なエラー】が発生しました。")
+        logger.exception(f"ユーザー '{user_name}' のデータ保存中 (対象行: {user_row_index}) に【重大なエラー】が発生しました。")
         st.session_state.save_status = f"error: {e}"
-        # [修正] エラー時は dirty = True のままにして、再試行の機会を残す
+        # エラー時は dirty = True のままにして、再試行の機会を残す
     
     finally:
-        # --- 6. ロックの解放 ---
-        # [修正] 'st.session_state.save_lock' ではなく、引数 'lock' を使用する
+        # --- 5. ロックの解放 ---
         lock.release() 
         logger.info(f"ユーザー '{user_name}': ロックを解放しました。保存スレッドを終了します。")
 
-# app.py
 
-# app.py
 
 def transition_and_save_in_background(view=None, index_change=0):
     """
@@ -527,23 +462,34 @@ def transition_and_save_in_background(view=None, index_change=0):
         st.toast("変更を保存しています...", icon="⏳")
         st.session_state.save_status = "pending"
         
-        # [修正] スレッドに渡す引数のタプルに st.session_state.save_lock を追加
-        args = (
-            st.session_state.user_name, 
-            st.session_state.voted_for.copy(), 
-            st.session_state.favorites.copy(), 
-            st.session_state.free_votes.copy(),
-            st.session_state.save_lock  # [修正] ロックオブジェクトそのものを引数として渡す
-        )
-        logger.info(f"スレッド引数: User='{args[0]}', "
-                    f"Votes={len(args[1])}, "
-                    f"Favs={len(args[2])}, "
-                    f"FreeVotes={len(args[3])}, "
-                    f"Lock={args[4]}") # [修正] ロックオブジェクトをログに出力
-        
-        save_thread = threading.Thread(target=save_all_progress, args=args)
-        save_thread.start()
-        logger.info(f"スレッド (target=save_all_progress) を .start() しました。")
+        # [変更後] メインスレッドで全てのデータ変換を完了させる
+        try:
+            user_name = st.session_state.user_name
+            user_row_index = st.session_state.user_row_index # Phase 4 で保存される
+            json_voted = json.dumps(st.session_state.voted_for.copy(), ensure_ascii=False)
+            json_free = json.dumps(st.session_state.free_votes.copy(), ensure_ascii=False)
+            json_fav = json.dumps(st.session_state.favorites.copy(), ensure_ascii=False)
+            timestamp_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            args = (
+                user_name,
+                user_row_index,
+                json_voted,
+                json_free,
+                json_fav,
+                timestamp_str,
+                st.session_state.save_lock
+            )
+            
+            logger.info(f"スレッド引数 (KVS): User='{user_name}', Row={user_row_index}")
+            save_thread = threading.Thread(target=save_all_progress, args=args)
+            save_thread.start()
+            logger.info(f"スレッド (target=save_all_progress) を .start() しました。")
+
+        except Exception as e:
+            logger.exception(f"バックグラウンド保存スレッドの起動準備中にエラー: {e}")
+            st.toast("エラー: 保存の準備に失敗しました。", icon="❌")
+            # この場合、dirtyフラグはTrueのまま残り、次の遷移時に再試行される
         
     else:
         logger.info(f"データ変更 (dirty=False) はありません。保存スレッドは起動しません。")
@@ -575,52 +521,96 @@ def render_login_page():
 
         st.session_state.user_name = name
         
-        with st.spinner("過去の投票履歴を読み込んでいます..."):
+        with st.spinner("投票履歴を読み込んでいます..."):
             total_loaded = 0 # 読み込んだ履歴の件数をカウントする変数
             try:
-                # 1. スプレッドシート接続と全データ取得
+                # 1. [変更後] UserDataシートを開き、A列(投票者名)を全て取得
                 spreadsheet = st.session_state.gc.open(SPREADSHEET_NAME)
-                sheet_votes = spreadsheet.worksheet(VOTE_SHEET_NAME)
-                all_data = sheet_votes.get_all_records()
-                sheet_favs = spreadsheet.worksheet(FAV_SHEET_NAME)
-                all_fav_data = sheet_favs.get_all_records()
-                logger.info(f"ユーザー '{name}': 履歴読み込み - 投票{len(all_data)}件、お気に入り{len(all_fav_data)}件を取得。")
-
-                # 2. ログインユーザーのデータ抽出
-                user_votes = [r for r in all_data if r.get('投票者') == name]
-                user_favs = [r for r in all_fav_data if r.get('投票者') == name]
-
-                # 3. 代表票の履歴読み込み処理
-                voted_map = {}
-                rep_votes_records = [v for v in user_votes if v.get('投票の種類') == '代表票']
-
-                for v_record in rep_votes_records:
-                    photo_id = v_record.get('写真ID')
-                    if not photo_id: continue
-                    if photo_id in st.session_state.photo_id_map:
-                        submitter = st.session_state.photo_id_map[photo_id].get('submitter')
-                        if submitter: voted_map[submitter] = photo_id
-                    else:
-                        logger.warning(f"ユーザー '{name}': 履歴の写真ID '{photo_id}' がマスターに存在しません。")
-
-                # 4. 自由票・お気に入り履歴の読み込み処理 (マスターに存在するIDのみ)
-                free_votes_list = [v['写真ID'] for v in user_votes if v.get('投票の種類') == '自由票' and v.get('写真ID') and v['写真ID'] in st.session_state.photo_id_map]
-                fav_list = [r['写真ID'] for r in user_favs if r.get('写真ID') and r['写真ID'] in st.session_state.photo_id_map]
+                sheet_userdata = spreadsheet.worksheet(USER_DATA_SHEET_NAME)
                 
-                # 5. session_stateへの最終登録
-                st.session_state.voted_for = voted_map
-                st.session_state.free_votes = free_votes_list
-                st.session_state.favorites = fav_list
-                logger.info(f"ユーザー '{name}': 履歴読み込み完了。代表票{len(voted_map)}, 自由票{len(free_votes_list)}, お気に入り{len(fav_list)}")
+                logger.info(f"ユーザー '{name}': [KVS読込] UserDataシート A列(投票者名)の取得を開始。")
+                all_users_list = sheet_userdata.col_values(1) # ヘッダー(A1)から全ユーザー名を取得
+                logger.info(f"ユーザー '{name}': [KVS読込] A列の取得完了 (全 {len(all_users_list)} 行)。")
 
-                # [変更点] 読み込んだ件数をチェック
-                total_loaded = len(voted_map) + len(free_votes_list) + len(fav_list)
+                user_row_index = -1
+                if name in all_users_list:
+                    # --- (A) 既存ユーザーの場合 ---
+                    user_row_index = all_users_list.index(name) + 1 # +1 してgspreadの行番号(1-indexed)にする
+                    logger.info(f"ユーザー '{name}': [KVS読込] 既存ユーザーを発見。対象行: {user_row_index}")
+                    
+                    # 該当行のデータ (B列〜E列) のみを取得 (APIコール 1回)
+                    row_data = sheet_userdata.row_values(user_row_index)
+                    
+                    # row_data[0] はA列(名前)なので、B列(インデックス1)からパースする
+                    voted_map = json.loads(row_data[1] or "{}")      # B列: 代表票_json
+                    free_votes_list = json.loads(row_data[2] or "[]") # C列: 自由票_json
+                    fav_list = json.loads(row_data[3] or "[]")        # D列: お気に入り_json
+
+                    # 読み込んだデータがマスターに存在するかチェック (削除された写真IDを除外)
+                    voted_map = {k: v for k, v in voted_map.items() if v in st.session_state.photo_id_map}
+                    free_votes_list = [pid for pid in free_votes_list if pid in st.session_state.photo_id_map]
+                    fav_list = [pid for pid in fav_list if pid in st.session_state.photo_id_map]
+                    
+                    st.session_state.user_row_index = user_row_index
+                    st.session_state.voted_for = voted_map
+                    st.session_state.free_votes = free_votes_list
+                    st.session_state.favorites = fav_list
+                    
+                    logger.info(f"ユーザー '{name}': 履歴読み込み完了。代表票{len(voted_map)}, 自由票{len(free_votes_list)}, お気に入り{len(fav_list)}")
+                    total_loaded = len(voted_map) + len(free_votes_list) + len(fav_list)
+
+                else:
+                    # --- (B) 新規ユーザーの場合 (競合対策v2適用) ---
+                    logger.warning(f"ユーザー '{name}': [KVS読込] 新規ユーザーです。行の追加処理を開始。")
+                    
+                    # 1. 新しい行データを追加 (APIコール 1回)
+                    timestamp_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    new_row_data = [name, "{}", "[]", "[]", timestamp_str] # A列〜E列
+                    sheet_userdata.append_row(new_row_data, value_input_option='USER_ENTERED')
+                    logger.info(f"ユーザー '{name}': [KVS読込] append_row() が完了。")
+
+                    # 2.【競合対策】再度A列を全件取得し、自分が書き込んだ「最初」の行を探す
+                    logger.info(f"ユーザー '{name}': [KVS読込] 競合対策のため、再度A列の全件取得を開始。")
+                    latest_users_list = sheet_userdata.col_values(1)
+                    logger.info(f"ユーザー '{name}': [KVS読込] 最新A列 (全 {len(latest_users_list)} 行) を取得完了。")
+                    
+                    # 自分の名前と一致する全てのインデックス(0-indexed)を取得
+                    indices = [i for i, user in enumerate(latest_users_list) if user == name]
+                    
+                    # 最小のインデックス(＝最も早く書き込まれた行)を「正」とする
+                    canonical_index = min(indices)
+                    canonical_row_index = canonical_index + 1 # gspreadの行番号(1-indexed)に変換
+                    
+                    logger.info(f"ユーザー '{name}': [KVS読込] 自身の行インデックスを {indices} と認識。正準行を {canonical_row_index} に決定。")
+
+                    # 3. セッションに空のデータを登録
+                    st.session_state.user_row_index = canonical_row_index
+                    st.session_state.voted_for = {}
+                    st.session_state.free_votes = []
+                    st.session_state.favorites = []
+                    total_loaded = 0 # 新規ユーザーなので0
 
             except Exception as e:
                 logger.exception(f"ユーザー '{name}' の履歴読み込み中にエラーが発生。")
                 st.error("履歴の読み込みに失敗しました。投票はリセットされた状態で開始されます。")
                 st.session_state.voted_for, st.session_state.free_votes, st.session_state.favorites = {}, [], []
+                st.session_state.user_row_index = None # [追加] エラー時は行不明
                 time.sleep(2.5) # エラーメッセージをユーザーが読むための時間
+
+        # `with st.spinner` の外 (スピナーが消えた後) でメッセージを表示
+        
+        if total_loaded > 0:
+            st.success(f"前回の投票データ ({total_loaded}件) を読み込みました。続きから開始します。")
+            time.sleep(1.5) # ユーザーがメッセージを読むための時間
+        else:
+            # エラー時以外は、初回訪問時のメッセージを出す
+            if 'save_status' not in st.session_state or 'error' not in st.session_state.save_status:
+                 st.success("ようこそ！投票を開始します。")
+                 time.sleep(1) 
+
+        # 履歴読み込みが成功しても失敗しても、次のページへ遷移する
+        st.session_state.view = 'instructions'
+        st.rerun()
 
         # `with st.spinner` の外 (スピナーが消えた後) でメッセージを表示
         
@@ -757,19 +747,50 @@ def render_free_vote_page():
     if not st.session_state.get('voting_complete', False):
         if st.button("全ての投票を完了する", type="primary", use_container_width=True):
             with st.spinner("最終投票を保存しています..."):
-                save_all_progress(
-                    st.session_state.user_name, 
-                    st.session_state.voted_for,
-                    st.session_state.favorites, 
-                    st.session_state.free_votes, # <-- カンマを追加
-                    st.session_state.save_lock
-                )
-                st.session_state.dirty = False
+                try:
+                    # [変更後] メインスレッドで全てのデータ変換を完了させる
+                    user_name = st.session_state.user_name
+                    user_row_index = st.session_state.user_row_index
+                    json_voted = json.dumps(st.session_state.voted_for.copy(), ensure_ascii=False)
+                    json_free = json.dumps(st.session_state.free_votes.copy(), ensure_ascii=False)
+                    json_fav = json.dumps(st.session_state.favorites.copy(), ensure_ascii=False)
+                    timestamp_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+                    # [変更後] 同期呼び出し (スレッドは使わない)
+                    save_all_progress(
+                        user_name,
+                        user_row_index,
+                        json_voted,
+                        json_free,
+                        json_fav,
+                        timestamp_str,
+                        st.session_state.save_lock
+                    )
+                except Exception as e:
+                    logger.exception("最終投票の同期保存中に予期せぬエラーが発生。")
+                    st.session_state.save_status = f"error: {e}"
+
+            # [変更後] save_status をチェックし、成功時のみBalloonsを出す
+            save_status_result = st.session_state.get("save_status", "error: unknown")
+
+            if save_status_result == "success":
+                st.balloons(); st.success("投票が完了しました！")
+                st.session_state.voting_complete = True
+                time.sleep(1.5)
+                # save_status は成功したのでクリーンアップ
+                if "save_status" in st.session_state: del st.session_state["save_status"]
+                st.rerun()
             
-            st.balloons(); st.success("投票が完了しました！")
-            st.session_state.voting_complete = True
-            time.sleep(1.5)
-            st.rerun()
+            elif save_status_result == "skipped: saving in progress":
+                st.warning("現在、他の保存処理が実行中です。少し待ってからもう一度「全ての投票を完了する」ボタンを押してください。")
+                # dirty = True のままにして再試行の機会を残す
+            
+            else:
+                st.error(f"最終保存に失敗しました。お手数ですが、ページを再読み込み（リロード）して、もう一度「全ての投票を完了する」ボタンを押してください。 (詳細: {save_status_result})")
+                # dirty = True のままにして再試行の機会を残す
+            
+            # 失敗時は save_status を残してデバッグしやすくする (rerun時にトーストで表示される)
+
     else:
         st.success("投票お疲れ様でした！")
         if st.button("🏆 最終結果を見る", type="primary", use_container_width=True):
