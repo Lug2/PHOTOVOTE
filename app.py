@@ -37,52 +37,94 @@ st.set_page_config(layout="centered")
 st.markdown(
     """
     <style>
-        /* (フェードインアニメーション部分は省略) */
+        /* Google Fonts */
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap');
+
+        html, body, [class*="css"] {
+            font-family: 'Noto Sans JP', sans-serif;
+        }
+
+        /* Fade in animation */
         @keyframes fadeIn {
-          from { 
-            opacity: 0; 
-            /* transform: translateY(10px); */ 
-          }
-          to { 
-            opacity: 1; 
-            transform: translateY(0); 
-          }
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
         }
         div[data-testid="stAppViewContainer"] > .main {
-            animation: fadeIn 0.3s ease-in-out;
+            animation: fadeIn 0.4s ease-out;
         }
 
-
-        /* [修正] stImageコンテナに text-align: center を適用 */
+        /* Image Centering & Styling */
         div[data-testid="stImage"] {
-            text-align: center; /* このコンテナ内の要素(img)を中央揃えにする */
+            display: flex;
+            justify_content: center;
+            align_items: center;
+            width: 100%;
+            margin-bottom: 1rem;
         }
-
-        /* [削除] img へのスタイル指定は不要です */
-        /* div[data-testid="stImage"] img {
-             ... (前回の指定を削除) ...
-        }
-        */
-
-        /* [修正] 画像(img)自体を中央寄せする */
         div[data-testid="stImage"] img {
-            /* border-radius: 8px; */  /* ← [削除] 角丸の指定を削除 */
-            display: block;         /* 中央寄せのためにブロック要素化 */
-            margin-left: auto;      /* 左マージンを自動に */
-            margin-right: auto;     /* 右マージンを自動に */
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s ease;
+        }
+        div[data-testid="stImage"] img:hover {
+            transform: scale(1.02);
         }
 
-        /* その他UIの微調整 */
-        div[data-testid="stImage"] { text-align: center; } /* 画像を中央揃えに */
-        div[data-stale="true"] { opacity: 1.0 !important; }
-        div[data-stale="true"] * { opacity: 1.0 !important; }
-        .stButton>button:disabled {
-            opacity: 1.0 !important; color: white !important;
-            background-color: #262730 !important;
-            border: 1px solid rgba(250, 250, 250, 0.2) !important;
+        /* Card Styling for st.container(border=True) */
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            background-color: #262730; /* Dark theme card background */
+            border: 1px solid #464b5d;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+            margin-bottom: 24px;
         }
+
+        /* Button Styling */
+        .stButton > button {
+            border-radius: 8px;
+            font-weight: bold;
+            transition: all 0.2s;
+            border: none;
+        }
+        .stButton > button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        /* Primary Button Emphasis */
+        .stButton > button[kind="primary"] {
+            background: linear-gradient(90deg, #ff4b4b 0%, #ff6b6b 100%);
+            box-shadow: 0 4px 10px rgba(255, 75, 75, 0.3);
+        }
+
+        /* Headers */
+        h1, h2, h3, h4, h5, h6 {
+            font-weight: 700;
+            letter-spacing: 0.05em;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0e1117;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #555;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #888;
+        }
+        
+        /* Modal/Dialog adjustments */
         [data-testid="stDialog"] > div > div {
             width: 95vw; max-width: 95vw; height: 95vh; overflow: auto;
+            border-radius: 16px;
         }
     </style>
     """,
